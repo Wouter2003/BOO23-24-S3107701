@@ -1,0 +1,299 @@
+---
+title: "BOO2024 - Hands-on workshop DEG analysis"
+author: "Imke Bruns (MSc), Steven Kunnen (PhD), Giulia Callegaro (PhD), Hugo van Kessel (Msc)"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: default
+    highlight: kate
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+# Setup {.tabset}
+```{r include=FALSE, echo=TRUE, message=FALSE}
+rm(list = ls()); gc()
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 80), tidy = TRUE)
+```
+
+
+## Load packages
+### CRAN
+```{r}
+# Check if pacman is available and install
+if(!require("pacman", quietly = T)){install.packages("pacman")}; library(pacman)
+
+# use packman to install CRAN packages
+p_load(tidyverse, data.table, enrichR, fgsea)
+
+```
+
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+```
+
+
+## Load functions
+Functions can also be loaded from a source script, but for clarity we will include them in the script.
+```{r}
+
+
+runEnrichR = function(genes) {
+  enrichR = enrichr(
+    genes = genes,
+    databases = c(
+      "BioCarta_2016",
+      "HumanCyc_2016",
+      "KEGG_2021_Human",
+      "Reactome_2022",
+      "WikiPathway_2021_Human",
+      "InterPro_Domains_2019",
+      "GO_Molecular_Function_2023",
+      "GO_Cellular_Component_2023",
+      "GO_Biological_Process_2023"
+    )
+  ) 
+  
+  enrichR = rbindlist(enrichR, idcol = T)
+  names(enrichR)[1:2] = c("database", "source")
+  return(enrichR)
+}
+
+```
+
+
+
+# Load data {.tabset}
+Here you should load the data you obtained from the quality control (QC) workshop last week.
+
+## Metadata
+We name the object `metadata`, try to read the data into R yourself.
+```{r}
+# metadata = 
+metadata<-  read_delim(file.path(input_dir,"20240517_metadata_processed.csv"))
+
+metadata<-
+  metadata %>%
+  select(SAMPLE_ID, everything())
+
+```
+
+
+## DESeq2 output
+We name the object `deseq_results`, try to read the data into R yourself.
+```{r}
+# deseq_results = 
+deseq_results <-  readRDS(file.path(output_dir,"20240522_DESeq2_results_unformatted.rds"))
+```
+
+
+# Overrepresentation analysis
+Questions:   
+* Which cellular processes are activated your cell type of interest after compound exposure?
+
+```{r}
+url_link = "https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/"
+download.file(paste0(url_link, "Mus_musculus.gene_info.gz"), destfile = paste0(input_dir, "/Mus_musculus.gene_info.gz"), method = "auto")
+NCBI_gene <- fread(paste0(input_dir, "/Mus_musculus.gene_info.gz")) |>
+  mutate(dbXrefs = str_replace_all(dbXrefs, ":MGI:", ":"))
+
+# https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/Mus_musculus.gene_info.gz
+NCBI_gene <- NCBI_gene|>
+  mutate(mgi_id = str_extract(dbXrefs, pattern = "MGI[:]\\d+"),
+         # hgnc_id = str_extract(dbXrefs, pattern = "HGNC[:]\\d+"),
+         ensembl_id = str_extract(dbXrefs, pattern = "Ensembl[:]ENSMUSG\\d+"),
+         alliancegenome_id = str_extract(dbXrefs, pattern = "AllianceGenome[:]\\d+")) |>
+  mutate(
+    mgi_id = str_replace(mgi_id, pattern = "MGI[:]", ""),
+         # hgnc_id = str_replace(hgnc_id, pattern = "HGNC[:]", ""),
+         ensembl_id = str_replace(ensembl_id, pattern = "Ensembl[:]", ""),
+         alliancegenome_id = str_replace(alliancegenome_id, pattern = "AllianceGenome[:]", ""),
+         # Symbol = paste0("id_", Symbol),
+         # GeneID = paste0("id_", GeneID),
+         user_date = as.integer(str_remove_all(Sys.Date(), "-"))) |>
+  dplyr::select("entrez_id" = GeneID, "gene_symbol" = Symbol, ensembl_id, mgi_id, alliancegenome_id, "modification_date" = Modification_date,user_date)
+
+
+```
+
+
+```{r}
+if(!require("dplyr", quietly = T)){BiocManager::install("dplyr", force=TRUE)};
+library(dplyr)
+
+NCBI_gene_filtered <- NCBI_gene %>%
+  select(gene_symbol, ensembl_id)
+
+
+deseq_results_2 <- deseq_results %>%
+  mutate(ensembl_id = gsub("\\..*", "", GENE_ID))
+
+
+deseq_results_gene_symbol <- deseq_results_2  %>% 
+  left_join(NCBI_gene_filtered %>% select(gene_symbol, ensembl_id), by = "ensembl_id")
+
+deseq_results_enrichR <- deseq_results_gene_symbol %>%
+  select(-GENE_ID)%>%
+  select(gene_symbol, ensembl_id, everything())
+
+
+```
+
+
+##ORA for  treatment
+```{r error=F,warning=F,message=F}
+
+# We set the threshold for significant genes
+padj_threshold <- 0.05
+
+# We perform ORA analysis using EnrichR
+ora <- deseq_results_enrichR %>%
+  filter(padj < padj_threshold) %>%
+  nest_by(MEAN_ID_TREATMENT) %>%
+  mutate(significant_genes = list(data %>%
+                                    arrange(padj) %>%
+                                    # slice(1:50) %>%
+                                    pull(gene_symbol))) %>%
+  mutate(ora = list(
+    runEnrichR(genes = significant_genes) %>% filter(Adjusted.P.value < 0.05)
+  ))
+
+# print the output
+for (i in ora$MEAN_ID_TREATMENT) {
+  print(paste0("Top 10 significant ORA for ", i))
+  print(
+    ora %>%
+      filter(MEAN_ID_TREATMENT == i) %>%
+      select(MEAN_ID_TREATMENT, ora) %>%
+      unnest(cols = c(ora)) %>%
+      select(MEAN_ID_TREATMENT, database, source, Adjusted.P.value, Genes) %>%
+      arrange(Adjusted.P.value) %>%
+      ungroup()%>%
+      slice(1:20)
+  )
+}
+
+```
+
+
+```{r}
+ORA_results <- ora %>%
+  unnest(cols = c(ora)) %>%
+  select(MEAN_ID_TREATMENT, source, Adjusted.P.value) %>%
+  ungroup()
+
+# Function to select top 5 highest NES and bottom 5 lowest NES pathways per condition
+get_top_and_bottom_Adjusted.P.value <- function(ORA_results, n = 5) {
+  # Add absolute Adjusted.P.value column
+  ORA_results <- ORA_results %>%
+    mutate(abs_Adjusted.P.value = abs(Adjusted.P.value))
+  
+  # Sort by Adjusted.P.value within each condition
+  sorted_results <- ORA_results %>%
+    arrange(MEAN_ID_TREATMENT, desc(Adjusted.P.value))
+  
+  # Select top 5 highest Adjusted.P.value and bottom 5 lowest Adjusted.P.value pathways per condition
+  top_and_bottom_Adjusted.P.value <- sorted_results %>%
+    group_by(MEAN_ID_TREATMENT) %>%
+    slice(c(1:n, n() - (0:(n-1)))) %>%  # Select top n and bottom n rows per group
+    ungroup() %>%
+    arrange(MEAN_ID_TREATMENT, desc(Adjusted.P.value)) %>%  # Optional: reorder for clarity
+    select(-abs_Adjusted.P.value)  # Remove abs_Adjusted.P.value column if not needed
+  
+  return(top_and_bottom_Adjusted.P.value)
+}
+
+# Usage example:
+combined_results_ora <- get_top_and_bottom_Adjusted.P.value(ORA_results, n = 5)
+
+write.table(combined_results_ora, file.path(output_dir, paste0(gsub( "-", "", Sys.Date()), "_ORA_results_mouse.txt")), sep = "\t", row.names = F)
+
+```
+
+
+##ORA for control
+```{r error=F,warning=F,message=F}
+
+# We set the threshold for significant genes
+padj_threshold <- 0.05
+
+# We perform ORA analysis using EnrichR
+ora <- deseq_results_enrichR %>%
+  filter(padj < padj_threshold) %>%
+  nest_by(MEAN_ID_TREATMENT) %>%
+  mutate(significant_genes = list(data %>%
+                                    arrange(padj) %>%
+                                    # slice(1:50) %>%
+                                    pull(gene_symbol))) %>%
+  mutate(ora = list(
+    runEnrichR(genes = significant_genes) %>% filter(Adjusted.P.value < 0.05)
+  ))
+
+# print the output
+for (i in ora$MEAN_ID_TREATMENT) {
+  print(paste0("Top 10 significant ORA for ", i))
+  print(
+    ora %>%
+      filter(MEAN_ID_TREATMENT == i) %>%
+      select(MEAN_ID_TREATMENT, ora) %>%
+      unnest(cols = c(ora)) %>%
+      select(MEAN_ID_TREATMENT, database, source, Adjusted.P.value, Genes) %>%
+      arrange(Adjusted.P.value) %>%
+      ungroup()%>%
+      slice(1:20)
+  )
+}
+
+str(ora$significant_genes)
+
+```
+
+
+```{r}
+ORA_results <- ora %>%
+  unnest(cols = c(ora)) %>%
+  select(MEAN_ID_TREATMENT, source, Adjusted.P.value) %>%
+  ungroup()
+
+# Function to select top 5 highest NES and bottom 5 lowest NES pathways per condition
+get_top_and_bottom_Adjusted.P.value <- function(ORA_results, n = 5) {
+  # Add absolute Adjusted.P.value column
+  ORA_results <- ORA_results %>%
+    mutate(abs_Adjusted.P.value = abs(Adjusted.P.value))
+  
+  # Sort by Adjusted.P.value within each condition
+  sorted_results <- ORA_results %>%
+    arrange(MEAN_ID_TREATMENT, desc(Adjusted.P.value))
+  
+  # Select top 5 highest Adjusted.P.value and bottom 5 lowest Adjusted.P.value pathways per condition
+  top_and_bottom_Adjusted.P.value <- sorted_results %>%
+    group_by(MEAN_ID_TREATMENT) %>%
+    slice(c(1:n, n() - (0:(n-1)))) %>%  # Select top n and bottom n rows per group
+    ungroup() %>%
+    arrange(MEAN_ID_TREATMENT, desc(Adjusted.P.value)) %>%  # Optional: reorder for clarity
+    select(-abs_Adjusted.P.value)  # Remove abs_Adjusted.P.value column if not needed
+  
+  return(top_and_bottom_Adjusted.P.value)
+}
+
+# Usage example:
+combined_results_ora <- get_top_and_bottom_Adjusted.P.value(ORA_results, n = 5)
+
+write.table(combined_results_ora, file.path(output_dir, paste0(gsub( "-", "", Sys.Date()), "_ORA_results_mouse.txt")), sep = "\t", row.names = F)
+
+```

@@ -1,0 +1,430 @@
+---
+title: "BOO2024 - Hands-on workshop DEG analysis"
+author: "Imke Bruns (MSc), Steven Kunnen (PhD), Giulia Callegaro (PhD), Hugo van Kessel (Msc)"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: default
+    highlight: kate
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+# Setup {.tabset}
+```{r include=FALSE, echo=TRUE, message=FALSE}
+rm(list = ls()); gc()
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 80), tidy = TRUE)
+```
+
+
+## Load packages
+### CRAN
+```{r}
+# Check if pacman is available and install
+if(!require("pacman", quietly = T)){install.packages("pacman")}; library(pacman)
+
+# use packman to install CRAN packages
+p_load(tidyverse, data.table, enrichR, fgsea)
+
+```
+
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+```
+
+
+# Load data {.tabset}
+Here you should load the data you obtained from the quality control (QC) workshop last week.
+
+## Metadata
+We name the object `metadata`, try to read the data into R yourself.
+```{r}
+ metadata = read_delim(file.path(input_dir,"20240517_metadata_processed.csv"))
+
+```
+
+
+## DESeq2 output
+We name the object `deseq_results`, try to read the data into R yourself.
+```{r}
+deseq_results = readRDS(file.path(output_dir,"20240522_DESeq2_results_unformatted.rds"))
+
+```
+
+
+```{r}
+url_link = "https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/"
+download.file(paste0(url_link, "Mus_musculus.gene_info.gz"), destfile = paste0(input_dir, "/Mus_musculus.gene_info.gz"), method = "auto")
+NCBI_gene <- fread(paste0(input_dir, "/Mus_musculus.gene_info.gz")) |>
+  mutate(dbXrefs = str_replace_all(dbXrefs, ":MGI:", ":"))
+
+# https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/Mus_musculus.gene_info.gz
+NCBI_gene <- NCBI_gene|>
+  mutate(mgi_id = str_extract(dbXrefs, pattern = "MGI[:]\\d+"),
+         # hgnc_id = str_extract(dbXrefs, pattern = "HGNC[:]\\d+"),
+         ensembl_id = str_extract(dbXrefs, pattern = "Ensembl[:]ENSMUSG\\d+"),
+         alliancegenome_id = str_extract(dbXrefs, pattern = "AllianceGenome[:]\\d+")) |>
+  mutate(
+    mgi_id = str_replace(mgi_id, pattern = "MGI[:]", ""),
+         # hgnc_id = str_replace(hgnc_id, pattern = "HGNC[:]", ""),
+         ensembl_id = str_replace(ensembl_id, pattern = "Ensembl[:]", ""),
+         alliancegenome_id = str_replace(alliancegenome_id, pattern = "AllianceGenome[:]", ""),
+         # Symbol = paste0("id_", Symbol),
+         # GeneID = paste0("id_", GeneID),
+         user_date = as.integer(str_remove_all(Sys.Date(), "-"))) |>
+  dplyr::select("entrez_id" = GeneID, "gene_symbol" = Symbol, ensembl_id, mgi_id, alliancegenome_id, "modification_date" = Modification_date,user_date)
+
+
+```
+
+
+```{r}
+if(!require("dplyr", quietly = T)){BiocManager::install("dplyr", force=TRUE)};
+library(dplyr)
+
+NCBI_gene_filtered <- NCBI_gene %>%
+  select(gene_symbol, ensembl_id)
+
+
+deseq_results_2 <- deseq_results %>%
+  mutate(ensembl_id = gsub("\\..*", "", GENE_ID))
+
+
+deseq_results_gene_symbol <- deseq_results_2  %>% 
+  left_join(NCBI_gene_filtered %>% select(gene_symbol, ensembl_id), by = "ensembl_id")
+
+deseq_results_enrichR <- deseq_results_gene_symbol %>%
+  select(-GENE_ID)%>%
+  select(gene_symbol, ensembl_id, everything())
+
+
+```
+
+
+
+# Gene set enrichment analysis {.tabset}
+
+## Load gmt files
+Gmt files can be downloaded from the msigdb database (https://www.gsea-msigdb.org/gsea/msigdb/). Load the pathway data of interest here using the `gmtPathways` function
+```{r}
+gmt_wikipathways = gmtPathways(file.path(
+  input_dir,
+  "GSEA_PATHWAYS",
+  "wikipathways.v2023.2.Hs.symbols.gmt"
+))
+
+gmt_reactome = gmtPathways(file.path(
+  input_dir,
+  "GSEA_PATHWAYS",
+  "reactome.v2023.2.Hs.symbols.gmt"
+))
+
+gmt_hallmarks = gmtPathways(file.path(
+  input_dir,
+  "GSEA_PATHWAYS",
+  "hallmarks.v2023.2.Hs.symbols.gmt"
+))
+
+combined_gmt <- c(gmt_wikipathways,  gmt_reactome)
+
+```
+
+##combine rat and mouse data
+```{r}
+mouse_data<- deseq_results_enrichR%>%
+  select(MEAN_ID_TREATMENT, gene_symbol, stat,)
+rat_data <- read.delim(file.path(output_dir,"NCSU_PHx_DEG_Data_all_symbol.txt"))
+rat_data<- rat_data%>% 
+  filter(experiment_id %in% c('NCSU.PHx_Liver_PHx_Hepatectomy_0d_caudate',
+                              'NCSU.PHx_Liver_PHx_Hepatectomy_0.042d_caudate',
+                              'NCSU.PHx_Liver_PHx_Hepatectomy_0.125d_caudate',
+                              'NCSU.PHx_Liver_PHx_Hepatectomy_0.25d_caudate',
+                           'NCSU.PHx_Liver_PHx_Hepatectomy_0.5d_caudate',	
+                          'NCSU.PHx_Liver_PHx_Hepatectomy_0.75d_caudate',				
+'NCSU.PHx_Liver_PHx_Hepatectomy_1d_caudate',			
+'NCSU.PHx_Liver_PHx_Hepatectomy_2d_caudate',		
+'NCSU.PHx_Liver_PHx_Hepatectomy_3d_caudate',				
+'NCSU.PHx_Liver_PHx_Hepatectomy_5d_caudate',			
+'NCSU.PHx_Liver_PHx_Hepatectomy_10d_caudate',				
+'NCSU.PHx_Liver_PHx_Hepatectomy_15d_caudate'
+))%>%
+  rename(MEAN_ID_TREATMENT = experiment_id, stat = t)
+
+rat_data<- rat_data %>%
+  select(gene_symbol, MEAN_ID_TREATMENT, stat)
+
+combined_rat_mouse <- rbind(rat_data, mouse_data)
+```
+
+
+
+## Run fgsea
+
+Questions:   
+* Explain how fgsea determines which pathways are enriched. What is the difference between an Overrepresentation Analysis (ORA) and a Gene Set Enrichment Analysis (GSEA)? 
+* We need to input a ranked gene list, we rank the genes based on their Wald statistic. What is the advantage of using the Wald statistic instead of for example the log2FoldChange? 
+
+  
+```{r}
+
+gsea <- combined_rat_mouse %>%
+  nest_by(MEAN_ID_TREATMENT) %>%
+  mutate(ranked_genes = list(
+    data %>% arrange(stat) %>% select(gene_symbol, stat) %>% deframe()
+  )) %>%
+  mutate(fgsea_output = list(fgsea(pathways = combined_gmt,
+                                   stats = ranked_genes)))
+
+
+# print the output
+for (i in gsea$MEAN_ID_TREATMENT) {
+  print(paste0("Top 10 significant pathways for ", i))
+  print(
+    gsea %>%
+      filter(MEAN_ID_TREATMENT == i) %>%
+      select(MEAN_ID_TREATMENT, fgsea_output) %>%
+      unnest(cols = c(fgsea_output)) %>%
+      select(MEAN_ID_TREATMENT, pathway, padj, NES) %>%
+      arrange(desc(abs(NES))) %>%
+      ungroup() %>%
+      slice(1:30)
+  )
+}
+
+```
+
+
+```{r}
+gsea_results <- gsea %>%
+  unnest(cols = c(fgsea_output)) %>%
+  select(MEAN_ID_TREATMENT, pathway, NES) %>%
+  ungroup()
+
+
+get_top_and_bottom_nes <- function(gsea_results, n = 5) {
+  # # Add absolute NES column
+  # gsea_results <- gsea_results %>%
+  #   mutate(abs_NES = abs(NES))
+  
+  # Sort by NES within each condition
+  sorted_results <- gsea_results %>%
+    arrange(MEAN_ID_TREATMENT, desc(NES))
+  
+  # Select top 5 highest NES and bottom 5 lowest NES pathways per condition
+  top_and_bottom_nes <- sorted_results %>%
+    group_by(MEAN_ID_TREATMENT) %>%
+    slice(c(1:n, n() - (0:(n-1)))) %>%  # Select top n and bottom n rows per group
+    ungroup() %>%
+    arrange(MEAN_ID_TREATMENT, desc(NES)) 
+  
+  return(top_and_bottom_nes)
+}
+
+# Usage example:
+combined_results <- get_top_and_bottom_nes(gsea_results, n = 5)
+```
+
+##rename the MEAN_ID_TREATMENT
+```{r}
+GSEA_results_rat <- combined_results %>%
+  filter(!MEAN_ID_TREATMENT  == "liver hepatocytes_PHx_48hr")
+
+GSEA_results_mouse<- combined_results %>%
+  filter(MEAN_ID_TREATMENT  == "liver hepatocytes_PHx_48hr")
+```
+
+##rename experiment_id
+```{r}
+transform_experiment_id <- function(MEAN_ID_TREATMENT) {
+  # Extract the time point using regular expressions
+  time_point <- str_extract(MEAN_ID_TREATMENT, "\\d+\\.?\\d*d")
+  # Construct the new experiment_id
+  new_experiment_id <- paste("NCSU.PHx", time_point, "rat", sep = "_")
+  return(new_experiment_id)
+}
+
+GSEA_results_rat <- GSEA_results_rat %>%
+  mutate(MEAN_ID_TREATMENT = sapply(MEAN_ID_TREATMENT, transform_experiment_id))
+
+transform_experiment_id_mouse <- function(MEAN_ID_TREATMENT) {
+  # Extract the time point using regular expressions
+  time_point <- str_extract(MEAN_ID_TREATMENT, "\\d+(\\.\\d+)?d|\\d+h")
+  # Construct the new experiment_id
+  new_experiment_id <- paste("PHx", time_point, "mouse", sep = "_")
+  return(new_experiment_id)
+}
+
+GSEA_results_mouse <- GSEA_results_mouse %>%
+  mutate(MEAN_ID_TREATMENT = sapply(MEAN_ID_TREATMENT, transform_experiment_id_mouse))
+
+GSEA_results_combined<- rbind(GSEA_results_mouse, GSEA_results_rat)
+
+```
+
+```{r}
+
+desired_order <- c(
+  "PHx_48h_mouse",
+  "NCSU.PHx_0d_rat",
+  "NCSU.PHx_0.042d_rat",
+  "NCSU.PHx_0.125d_rat",
+  "NCSU.PHx_0.25d_rat",
+  "NCSU.PHx_0.5d_rat",
+  "NCSU.PHx_0.75d_rat",
+  "NCSU.PHx_1d_rat",
+  "NCSU.PHx_2d_rat",
+  "NCSU.PHx_3d_rat",
+  "NCSU.PHx_5d_rat",
+  "NCSU.PHx_10d_rat",
+  "NCSU.PHx_15d_rat"
+)
+
+GSEA_results_combined$MEAN_ID_TREATMENT <- factor(GSEA_results_combined$MEAN_ID_TREATMENT, levels = desired_order)
+
+```
+
+##select the nes values for all pathways and models
+```{r}
+# combined_results_pathways contains all the unique pathways you want to select
+combined_results_pathways <- GSEA_results_combined$pathway
+
+# Initialize an empty data frame to store combined results
+combined_filtered_results_rat_mice_2 <- data.frame()
+
+# Extract fgsea_output and MEAN_ID_TREATMENT from gsea tibble
+fgsea_output_list <- gsea$fgsea_output
+mean_id_treatment_list <- unique(gsea$MEAN_ID_TREATMENT)
+
+# Loop through each list in fgsea_output_list
+for (i in seq_along(fgsea_output_list)) {
+  # Extract the current list and corresponding MEAN_ID_TREATMENT
+  current_list <- fgsea_output_list[[i]]
+  mean_id_treatment <- mean_id_treatment_list[[i]]
+  
+  # Convert to data frame if necessary
+  current_df <- as.data.frame(current_list)
+  
+  # Append MEAN_ID_TREATMENT to the current data frame
+  current_df$MEAN_ID_TREATMENT <- mean_id_treatment
+  
+  # Filter the current data frame for the pathways in combined_results_pathways
+  filtered_df <- current_df %>%
+    filter(pathway %in% combined_results_pathways) %>%
+    select(pathway, NES, MEAN_ID_TREATMENT)
+  
+  # Append the filtered data frame to the combined data frame
+  combined_filtered_results_rat_mice_2 <- rbind(combined_filtered_results_rat_mice_2, filtered_df)
+}
+```
+
+```{r}
+GSEA_results_rat <- combined_results %>%
+  filter(!MEAN_ID_TREATMENT  == "liver hepatocytes_PHx_48hr")
+
+GSEA_results_mouse<- combined_results %>%
+  filter(MEAN_ID_TREATMENT  == "liver hepatocytes_PHx_48hr")
+```
+
+
+
+```{r}
+
+combined_filtered_results_rat_2<- combined_filtered_results_rat_mice_2%>%
+  filter(!MEAN_ID_TREATMENT  == "liver hepatocytes_PHx_48hr")
+  
+combined_filtered_results_mouse_2<-combined_filtered_results_rat_mice_2%>%
+  filter(MEAN_ID_TREATMENT  == "liver hepatocytes_PHx_48hr")
+
+
+transform_experiment_id <- function(MEAN_ID_TREATMENT) {
+  # Extract the time point using regular expressions
+  time_point <- str_extract(MEAN_ID_TREATMENT, "\\d+\\.?\\d*d")
+  # Construct the new experiment_id
+  new_experiment_id <- paste("NCSU.PHx", time_point, "rat", sep = "_")
+  return(new_experiment_id)
+}
+
+GSEA_results_rat <- combined_filtered_results_rat_2 %>%
+  mutate(MEAN_ID_TREATMENT = sapply(MEAN_ID_TREATMENT, transform_experiment_id))
+
+transform_experiment_id_mouse <- function(MEAN_ID_TREATMENT) {
+  # Extract the time point using regular expressions
+  time_point <- str_extract(MEAN_ID_TREATMENT, "\\d+(\\.\\d+)?d|\\d+h")
+  # Construct the new experiment_id
+  new_experiment_id <- paste("PHx", time_point, "mouse", sep = "_")
+  return(new_experiment_id)
+}
+
+GSEA_results_mouse <- combined_filtered_results_mouse_2 %>%
+  mutate(MEAN_ID_TREATMENT = sapply(MEAN_ID_TREATMENT, transform_experiment_id_mouse))
+
+GSEA_results_combined_2<- rbind(GSEA_results_mouse, GSEA_results_rat)
+
+desired_order <- c(
+  "PHx_48h_mouse",
+  "NCSU.PHx_0d_rat",
+  "NCSU.PHx_0.042d_rat",
+  "NCSU.PHx_0.125d_rat",
+  "NCSU.PHx_0.25d_rat",
+  "NCSU.PHx_0.5d_rat",
+  "NCSU.PHx_0.75d_rat",
+  "NCSU.PHx_1d_rat",
+  "NCSU.PHx_2d_rat",
+  "NCSU.PHx_3d_rat",
+  "NCSU.PHx_5d_rat",
+  "NCSU.PHx_10d_rat",
+  "NCSU.PHx_15d_rat"
+)
+
+GSEA_results_combined_2$MEAN_ID_TREATMENT <- factor(GSEA_results_combined_2$MEAN_ID_TREATMENT, levels = desired_order)
+
+```
+
+##Make the heatmap
+```{r}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(plotly)
+
+# Create the heatmap
+heatmap_GSEA_ratmice <- ggplot(GSEA_results_combined_2, aes(x = MEAN_ID_TREATMENT, y = pathway, fill = NES)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red") +
+  labs(title = "5 most up and down regulated pathways based on NES score from GSEA",
+       x = "Experiment ID", y = "Pathway", fill = "NES") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, size = 6, color = ifelse(levels(GSEA_results_combined_2$MEAN_ID_TREATMENT) == "PHx_48h_mouse", "green", "orange")),
+    axis.text.y = element_text(size = 5),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 15)
+  )
+
+print(heatmap_GSEA_ratmice)
+```
+
+## export the heatmap
+```{r}
+library(reshape2)
+
+ggsave("Heatmap_GSEA_2806_final.png", plot = heatmap_GSEA_ratmice, width =12, height = 6)
+```
+
+
+

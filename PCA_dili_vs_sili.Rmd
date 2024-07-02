@@ -1,0 +1,157 @@
+---
+title: "PCA all dili and sili liver modules"
+output: html_notebook
+---
+## Load packages
+### CRAN
+```{r}
+# Check if pacman is available and install
+if(!require("pacman", quietly = T)){install.packages("pacman")}; library(pacman)
+
+# use packman to install CRAN packages
+p_load(tidyverse, ggpubr, corrr, ggfortify, ggcorrplot, ggdendro, data.table, GGally)
+if(!require("readxl", quietly=T)){install.packages("readxl")}; library("readxl")
+```
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+```
+
+
+## load the eg scores of SILI and DILI data
+```{r}
+library(dplyr)
+
+eg_scores_sili <- read.delim(file.path(output_dir,"UploadFile_moduleTable-2024-06-17.txt"))
+
+eg_scores_sili <- eg_scores_sili %>%
+  mutate(conc = "PHx", 
+         dataset = case_when(
+           sample_id == "uploadFile2_SINGLE_liverhepatocytesPHx48hr_2_1" ~ "sili_mouse",
+           TRUE ~ "sili_rat"
+         )) %>%
+  select(sample_id, module, eg_score, time, conc, dataset)
+
+eg_scores_dili <- readRDS(file.path(output_dir,"eg_score.rds"))
+
+eg_scores_dili <- eg_scores_dili %>%
+  mutate(dataset = "dili")%>%
+  select(sample_id, module, eg_score, time, conc_level, dataset)%>%
+  rename(conc = conc_level)
+  
+```
+
+
+##PCA plot of SILI data
+```{r}
+library(ggplot2)
+library(FactoMineR)
+library(factoextra)
+
+wide_data_sili <- eg_scores_sili %>%
+  pivot_wider(names_from = module, values_from = eg_score) 
+
+```
+
+
+##dataprep dili dataset
+```{r}
+wide_data_dili <- eg_scores_dili %>%
+  pivot_wider(names_from = module, values_from = eg_score)%>%
+  mutate(time = as.character(time))
+
+wide_data_sili_dili <- rbind(wide_data_sili, wide_data_dili)
+
+pca_results_sili_dili <- prcomp(wide_data_sili_dili %>% select(where(is.numeric)), center=FALSE, scale. = FALSE)
+```
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(tidyr)
+library(plotly)
+
+# Data manipulation to prepare the wide format data
+wide_data_dili <- eg_scores_dili %>%
+  pivot_wider(names_from = module, values_from = eg_score) %>%
+  mutate(time = as.character(time))
+
+wide_data_sili_dili <- rbind(wide_data_sili, wide_data_dili)
+
+# PCA computation
+pca_results_sili_dili <- prcomp(wide_data_sili_dili %>% select(where(is.numeric)), center = FALSE, scale. = FALSE)
+
+# Extract PCA scores
+pca_scores <- as.data.frame(pca_results_sili_dili$x)
+pca_scores <- cbind(wide_data_sili_dili, pca_scores)
+```
+
+```{r}
+# Define the color scale
+color_scale <- scale_colour_manual(
+  values = c("1" = "blue", "2" = "red", "3" = "purple") # Add all other levels with desired colors
+)
+
+# Subset the data for labeling
+label_data <- pca_scores %>%
+  filter(dataset %in% c("sili_mouse", "sili_rat"))
+
+# Create the PCA plot manually
+p <- ggplot(pca_scores, aes(x = PC1, y = PC2, colour = conc, shape = dataset)) +
+  geom_point(size = 2) +
+  theme_bw() +
+  color_scale +
+  geom_label_repel(data = label_data, aes(label = dataset), size = 3) +
+  labs(
+    x = paste0("PC1 (", round(summary(pca_results_sili_dili)$importance[2,1] * 100, 2), "% variance)"), 
+    y = paste0("PC2 (", round(summary(pca_results_sili_dili)$importance[2,2] * 100, 2), "% variance)")
+  )
+
+# Print the plot
+print(p)
+```
+
+##PCA plot for timepoint vs dataset
+
+```{r}
+# Create the PCA plot manually
+t <- ggplot(pca_scores, aes(x = PC1, y = PC2, colour = time, shape = dataset)) +
+  geom_point(size = 2) +
+  theme_bw() +
+  geom_label_repel(data = label_data, aes(label = dataset), size = 3) +
+  labs(
+    x = paste0("PC1 (", round(summary(pca_results_sili_dili)$importance[2, 1] * 100, 2), "% variance)"),
+    y = paste0("PC2 (", round(summary(pca_results_sili_dili)$importance[2, 2] * 100, 2), "% variance)")
+  )
+
+# Print the plot
+print(t)
+
+```
+
+
+```{r}
+library(cowplot)
+library(ggplot2)
+combined_PCA <- plot_grid(p, t, labels = c("A", "B"), ncol = 1)
+
+# Print the combined heatmap to check the result
+print(combined_PCA)
+
+# Save the combined heatmap as an image
+ggsave("combined_pca.png", combined_PCA, width = 10, height = 12, units = "in")
+```
+

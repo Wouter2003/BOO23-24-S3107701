@@ -1,0 +1,310 @@
+---
+title: "Heatmap_SILI_eg_scores_modules"
+output: html_notebook
+---
+
+```{r}
+# Check if pacman is available and install
+if(!require("pacman", quietly = T)){install.packages("pacman")}; library(pacman)
+
+# use packman to install CRAN packages
+p_load(tidyverse, data.table, enrichR, fgsea)
+
+p_load(tidyverse, ggpubr, corrr, ggfortify, ggcorrplot, ggdendro, data.table, GGally)
+if(!require("readxl", quietly=T)){install.packages("readxl")}; library("readxl")
+
+```
+
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+```
+
+```{r}
+module_results_rat <- read.delim(file.path(output_dir,"top10_bottom10_modules_rat.txt"))
+
+module_results_mouse <- read.delim(file.path(output_dir,"top10_bottom10_modules_mouse.txt"))
+
+```
+
+
+##Top and bottom 10 of mouse data
+```{r}
+module_result_mouse_top10 <- module_results_mouse %>%
+group_by(sample_id) %>%
+slice_max(eg_score, n = 10) %>%
+bind_rows(module_results_mouse %>% group_by(sample_id) %>% slice_min(eg_score, n = 10)) %>%
+ungroup() %>%
+  select(sample_id, module, eg_score)
+
+```
+
+##Top and bottom 10 of rat data
+```{r}
+library(dplyr)
+
+# Function to select top 5 highest eg_score and bottom 5 lowest eg_score pathways per condition
+get_top_and_bottom_eg_score <- function(split_data, n = 10) {
+  # Add absolute eg_score column
+    module_results_rat <- module_results_rat %>%
+    mutate(abs_eg_score = abs(eg_score))
+  
+  # Sort by eg_score within each condition
+  sorted_results <- module_results_rat %>%
+    arrange(desc(eg_score))
+  
+  # Select top 5 highest eg_score and bottom 5 lowest eg_score pathways per condition
+  top_and_bottom_eg_score <- sorted_results %>%
+    group_by(sample_id) %>%
+    slice(c(1:n, n() - (0:(n-1)))) %>%  # Select top n and bottom n rows per group
+    ungroup() %>%
+    arrange(sample_id, desc(eg_score)) %>%  # Optional: reorder for clarity
+    select(-abs_eg_score)  # Remove abs_eg_score column if not needed
+  
+  return(top_and_bottom_eg_score)
+}
+
+top10_bottom10_eg_score_rat <- get_top_and_bottom_eg_score(module_results_rat, n = 10) %>%
+  select(sample_id, module, eg_score)
+
+top10_bottom10_eg_score_rat_mice <- rbind(top10_bottom10_eg_score_rat, module_result_mouse_top10)
+```
+
+##chose
+```{r}
+module_results_rat_mouse <- rbind(module_results_mouse, module_results_rat)
+
+unique_modules <- unique(top10_bottom10_eg_score_rat_mice$module)
+
+filtered_data <- module_results_rat_mouse[module_results_rat_mouse$module %in% unique_modules, ]
+
+# Print the result to check
+print(filtered_data)
+```
+
+```{r}
+filtered_data_ordered <- filtered_data%>%
+  filter(sample_id != "uploadFile2_SINGLE_liverhepatocytesPHx48hr_48_1")%>%
+  mutate(sample_id = case_when(
+    sample_id == "uploadFile1_SINGLE_liverhepatocytesPHx48hr_48_1" ~ "PHx_2d_mouse",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0_1" ~ "NCSU.PHx_0d_rat", 
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.042_1" ~ "NCSU.PHx_0.042d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.125_1" ~ "NCSU.PHx_0.125d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.25_1" ~ "NCSU.PHx_0.25d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.5_1" ~ "NCSU.PHx_0.5d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.75_1" ~ "NCSU.PHx_0.75d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_1_1" ~ "NCSU.PHx_1d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_2_1" ~ "NCSU.PHx_2d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_3_1" ~ "NCSU.PHx_3d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_5_1" ~ "NCSU.PHx_5d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_10_1" ~ "NCSU.PHx_10d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_15_1" ~ "NCSU.PHx_15d_rat",
+    TRUE ~ sample_id # Retain original sample_id for other cases
+  )) 
+
+
+desired_order <- c(
+  "PHx_2d_mouse",
+  "NCSU.PHx_0d_rat",
+  "NCSU.PHx_0.042d_rat",
+  "NCSU.PHx_0.125d_rat",
+  "NCSU.PHx_0.25d_rat",
+  "NCSU.PHx_0.5d_rat",
+  "NCSU.PHx_0.75d_rat",
+  "NCSU.PHx_1d_rat",
+  "NCSU.PHx_2d_rat",
+  "NCSU.PHx_3d_rat",
+  "NCSU.PHx_5d_rat",
+  "NCSU.PHx_10d_rat",
+  "NCSU.PHx_15d_rat"
+)
+
+filtered_data_ordered$sample_id <- factor(filtered_data_ordered $sample_id, levels = desired_order)
+
+```
+
+
+```{r}
+library(reshape2)
+# Pivot the combined dataframe
+heatmap_data10_all <- dcast(filtered_data_ordered, module ~ sample_id, value.var = "eg_score")
+
+# Convert the data to matrix form for heatmap
+filtered_data_matrix <- as.matrix(heatmap_data10_all[,-1]) # Exclude the first column which is 'pathway'
+rownames(filtered_data_matrix) <- heatmap_data10_all$module
+
+# Plot the heatmap
+heatmap10_all <- ggplot(melt(filtered_data_matrix), aes(Var2, Var1, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue", 
+                       limits = c(-10, 10), midpoint = 0, na.value = "grey50") +
+  labs(title = "10 most up- and downregulated liver modules of rat and mice surgical model", x = "Experiment ID", y = "Module", fill = "NES score") +
+  theme_minimal() +
+   theme(axis.text.x = element_text(angle = 30, hjust = 1, size = 6),
+        axis.text.y = element_text(size = 6),
+        plot.title = element_text(size = 16, face = "bold"))
+
+
+print(heatmap10_all)
+```
+
+
+
+##Top and bottom 5 of rat data
+```{r}
+module_result_mouse_top5 <- module_results_mouse %>%
+group_by(sample_id) %>%
+slice_max(eg_score, n = 5) %>%
+bind_rows(module_results_mouse %>% group_by(sample_id) %>% slice_min(eg_score, n = 5)) %>%
+ungroup() %>%
+  select(sample_id, module, eg_score)
+
+```
+
+##Top and bottom 5 of rat data
+```{r}
+library(dplyr)
+
+# Function to select top 5 highest eg_score and bottom 5 lowest eg_score pathways per condition
+get_top_and_bottom_eg_score <- function(split_data, n = 5) {
+  # Add absolute eg_score column
+    module_results_rat <- module_results_rat %>%
+    mutate(abs_eg_score = abs(eg_score))
+  
+  # Sort by eg_score within each condition
+  sorted_results <- module_results_rat %>%
+    arrange(desc(eg_score))
+  
+  # Select top 5 highest eg_score and bottom 5 lowest eg_score pathways per condition
+  top_and_bottom_eg_score <- sorted_results %>%
+    group_by(sample_id) %>%
+    slice(c(1:n, n() - (0:(n-1)))) %>%  # Select top n and bottom n rows per group
+    ungroup() %>%
+    arrange(sample_id, desc(eg_score)) %>%  # Optional: reorder for clarity
+    select(-abs_eg_score)  # Remove abs_eg_score column if not needed
+  
+  return(top_and_bottom_eg_score)
+}
+
+top5_bottom5_eg_score_rat <- get_top_and_bottom_eg_score(module_results_rat, n = 5) %>%
+  select(sample_id, module, eg_score)
+
+# View the combined results
+print(top5_bottom5_eg_score_rat)
+
+top5_eg_score_rat_mice<- rbind(top5_bottom5_eg_score_rat, module_result_mouse_top5)
+```
+
+```{r}
+module_results_rat_mouse <- rbind(module_results_mouse, module_results_rat)
+
+unique_modules <- unique(top10_bottom10_eg_score_rat_mice$module)
+
+# heatmap_data10 <- dcast(combined_data10, module ~ sample_id, value.var = "eg_score")
+
+# Step 2: Filter combined_data5 to retain only rows where the module is in unique_modules
+filtered_data <- module_results_rat_mouse[module_results_rat_mouse$module %in% unique_modules, ]
+
+# Print the result to check
+print(filtered_data)
+```
+
+```{r}
+unique_modules5 <- unique(top5_eg_score_rat_mice$module)
+
+filtered_data5 <- module_results_rat_mouse[module_results_rat_mouse$module %in% unique_modules5, ]
+
+# Print the result to check
+print(filtered_data5)
+```
+
+
+
+```{r}
+filtered_data_ordered5 <- filtered_data5%>%
+  filter(sample_id != "uploadFile2_SINGLE_liverhepatocytesPHx48hr_48_1")%>%
+  mutate(sample_id = case_when(
+    sample_id == "uploadFile1_SINGLE_liverhepatocytesPHx48hr_48_1" ~ "PHx_2D_mouse",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0_1" ~ "NCSU.PHx_0d_rat", 
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.042_1" ~ "NCSU.PHx_0.042d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.125_1" ~ "NCSU.PHx_0.125d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.25_1" ~ "NCSU.PHx_0.25d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.5_1" ~ "NCSU.PHx_0.5d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_0.75_1" ~ "NCSU.PHx_0.75d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_1_1" ~ "NCSU.PHx_1d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_2_1" ~ "NCSU.PHx_2d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_3_1" ~ "NCSU.PHx_3d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_5_1" ~ "NCSU.PHx_5d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_10_1" ~ "NCSU.PHx_10d_rat",
+    sample_id == "uploadFile1_SINGLE_NCSUPHxcaudate_15_1" ~ "NCSU.PHx_15d_rat",
+    TRUE ~ sample_id # Retain original sample_id for other cases
+  )) 
+
+
+desired_order <- c(
+  "PHx_2D_mouse",
+  "NCSU.PHx_0d_rat",
+  "NCSU.PHx_0.042d_rat",
+  "NCSU.PHx_0.125d_rat",
+  "NCSU.PHx_0.25d_rat",
+  "NCSU.PHx_0.5d_rat",
+  "NCSU.PHx_0.75d_rat",
+  "NCSU.PHx_1d_rat",
+  "NCSU.PHx_2d_rat",
+  "NCSU.PHx_3d_rat",
+  "NCSU.PHx_5d_rat",
+  "NCSU.PHx_10d_rat",
+  "NCSU.PHx_15d_rat"
+)
+combined_data5<- filtered_data_ordered5
+combined_data5$sample_id <- factor(filtered_data_ordered5$sample_id, levels = desired_order)
+
+```
+
+
+
+
+```{r}
+heatmap_data5 <- dcast(combined_data5, module ~ sample_id, value.var = "eg_score")
+
+# Convert the data to matrix form for heatmap
+heatmap_matrix5 <- as.matrix(heatmap_data5[,-1]) # Exclude the first column which is 'module'
+rownames(heatmap_matrix5) <- heatmap_data5$module
+
+# Create the heatmap plot
+heatmap5 <- ggplot(melt(heatmap_matrix5), aes(Var2, Var1, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", 
+                       limits = c(-10, 10), midpoint = 0, na.value = "grey50", "Eigengene score") +
+  labs(title = "5 most up and downregulated liver modules of rat and mice surgical model", 
+       x = "Animal model & time point", y = "Liver module") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1,  colour = ifelse(levels(melt(heatmap_matrix5)$Var2) == "PHx_2D_mouse", "green", "orange")))
+
+print(heatmap5)
+```
+
+```{r}
+library(cowplot)
+library(ggplot2)
+combined_heatmap <- plot_grid(heatmap5, heatmap10_all, labels = c("A", "B"), ncol = 1)
+
+# Print the combined heatmap to check the result
+print(combined_heatmap)
+
+# Save the combined heatmap as an image
+ggsave("heatmap_top10_eg_scores_revised.png", heatmap5, width = 12, height = 10, units = "in")
+```
+

@@ -1,0 +1,153 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+---
+title: "heatmap sili vs sili ora/ORA"
+output: html_notebook
+---
+
+
+```{r}
+# Check if pacman is available and install
+if(!require("pacman", quietly = T)){install.packages("pacman")}; library(pacman)
+
+# use packman to install CRAN packages
+p_load(tidyverse, data.table, enrichR,)
+
+p_load(tidyverse, ggpubr, corrr, ggfortify, ggcorrplot, ggdendro, data.table, GGally)
+if(!require("readxl", quietly=T)){install.packages("readxl")}; library("readxl")
+library(dplyr)
+
+```
+
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+```
+
+
+## load the eg scores of rat and mice data
+```{r}
+
+ORA_results_rat_mice <- read.delim(file.path(output_dir,"20240623_ORA_results_heatmap_rat_mice"))
+
+ORA_results_rat_mice <- ORA_results_rat_mice %>%
+  rename(experiment_id = MEAN_ID_TREATMENT)
+  
+ORA_results_rat <- ORA_results_rat_mice %>%
+  filter(experiment_id != "liver hepatocytes_PHx_48hr")
+
+ORA_results_mice<- ORA_results_rat_mice %>%
+  filter(experiment_id == "liver hepatocytes_PHx_48hr")
+
+print(unique(ORA_results_rat_mice$experiment_id))
+
+```
+
+##rename experiment_id's
+```{r}
+transform_experiment_id <- function(experiment_id) {
+  # Extract the time point using regular expressions
+  time_point <- str_extract(experiment_id, "\\d+\\.?\\d*d")
+  # Construct the new experiment_id
+  new_experiment_id <- paste("NCSU.PHx", time_point, "rat", sep = "_")
+  return(new_experiment_id)
+}
+
+ORA_results_rat <- ORA_results_rat %>%
+  mutate(experiment_id = sapply(experiment_id, transform_experiment_id))
+
+transform_experiment_id_mouse <- function(experiment_id) {
+  # Extract the time point using regular expressions
+  time_point <- str_extract(experiment_id, "\\d+(\\.\\d+)?d|\\d+h")
+  # Construct the new experiment_id
+  new_experiment_id <- paste("PHx", time_point, "mouse", sep = "_")
+  return(new_experiment_id)
+}
+
+ORA_results_mice <- ORA_results_mice %>%
+  mutate(experiment_id = sapply(experiment_id, transform_experiment_id_mouse))
+```
+
+##put the experiment_ids in logical order
+```{r}
+
+combined_data <- bind_rows(ORA_results_mice, ORA_results_rat)
+
+desired_order <- c(
+  "PHx_48h_mouse",
+  "NCSU.PHx_0d_rat",
+  "NCSU.PHx_0.042d_rat",
+  "NCSU.PHx_0.125d_rat",
+  "NCSU.PHx_0.25d_rat",
+  "NCSU.PHx_0.5d_rat",
+  "NCSU.PHx_0.75d_rat",
+  "NCSU.PHx_1d_rat",
+  "NCSU.PHx_2d_rat",
+  "NCSU.PHx_3d_rat",
+  "NCSU.PHx_5d_rat",
+  "NCSU.PHx_10d_rat",
+  "NCSU.PHx_15d_rat"
+)
+
+# Assuming combined_data is already defined as the combined dataset
+
+# Convert experiment_id to factor with desired order
+combined_data$experiment_id <- factor(combined_data$experiment_id, levels = desired_order)
+
+
+```
+
+
+##heatmap of mouse and rat pathways
+```{r}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(plotly)
+
+heatmap_ORA_ratmice <- ggplot(combined_data, aes(x = experiment_id, y = source, fill = Adjusted.P.value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(title = "Heatmap of the ORA results of 5 most up and downregulated pathways based on P-value",
+       x = "Experiment ID", y = "Cellular Process", fill = "Adj.P.value") +
+  theme_minimal(base_family = "Helvetica") +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, size = 8, color = ifelse(levels(combined_data$experiment_id) == "PHx_48h_mouse", "green", "orange")),  # Rotate x-axis labels at 30 degrees
+    axis.text.y = element_text(size = 5),  # Adjust y-axis text size
+    axis.title = element_text(size = 12),  # Adjust axis title size
+    plot.title = element_text(size = 15, color = "white"),  # Adjust plot title size and color
+    panel.background = element_rect(fill = "black", color = NA)
+
+    
+  )
+print(heatmap_ORA_ratmice)
+
+```
+
+```{r}
+print(unique(combined_data$source))
+```
+
+
+
+```{r}
+library(reshape2)
+
+ggsave("heatmap_ORA_ratmice_combined.png", plot = heatmap_ORA_ratmice, width =15, height = 8)
+```
+

@@ -1,0 +1,484 @@
+---
+title: "48hSILI_vs_top10dilli"
+output: html_notebook
+---
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+# Load required packages
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+
+
+```
+
+
+## load the eg scores of SILI and DILI data
+```{r}
+library(dplyr)
+library(ggplot2)
+eg_scores_sili <- read.delim(file.path(output_dir,"UploadFile_moduleTable-2024-06-17.txt"))
+
+eg_scores_dili <- readRDS(file.path(output_dir,"eg_score.rds"))
+
+eg_scores_sili_filtered <- eg_scores_sili %>%
+  filter(time == "2")
+```
+
+
+##select the top 10 compounds with the highest pearR score for mouse
+```{r}
+eg_scores_dili_filtered1 <- eg_scores_dili %>%
+  filter(experiment == "PHALLOIDIN", conc == "1", time == "1") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+eg_scores_dili_filtered2 <- eg_scores_dili %>%
+filter(experiment == "MONOCROTALINE", conc == "10", time== "8") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered3 <- eg_scores_dili %>%
+filter(experiment == "DANAZOL", conc == "1000", time== "1") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered4 <- eg_scores_dili %>%
+filter(experiment == "METHYLENE DIANILINE", conc == "100", time== "4") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered5 <- eg_scores_dili %>%
+filter(experiment == "TRIMETHADIONE", conc == "500", time== "1") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered6 <- eg_scores_dili %>%
+filter(experiment == "THIOACETAMIDE", conc == "45", time== "4") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered7 <- eg_scores_dili %>%
+filter(experiment == "THIOACETAMIDE", conc == "45", time== "15") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))%>%
+  mutate(experiment_dili = paste0(experiment_dili, "2"))
+
+eg_scores_dili_filtered8 <- eg_scores_dili %>%
+filter(experiment == "CARBON TETRACHLORIDE", conc == "300", time== "15") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered9 <- eg_scores_dili %>%
+filter(experiment == "THIOACETAMIDE", conc == "45", time== "29") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))%>%
+  mutate(experiment_dili = paste0(experiment_dili, "3"))
+
+eg_scores_dili_filtered10 <- eg_scores_dili %>%
+filter(experiment == "MONOCROTALINE", conc == "10", time== "15") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))%>%
+  mutate(experiment_dili = paste0(experiment_dili, "2"))
+
+eg_scores_dili_sili_filtered <- rbind(
+  eg_scores_dili_filtered1, eg_scores_dili_filtered2, eg_scores_dili_filtered3) 
+  # eg_scores_dili_filtered4, eg_scores_dili_filtered5,
+  # eg_scores_dili_filtered6, eg_scores_dili_filtered7, eg_scores_dili_filtered8)
+  # eg_scores_dili_filtered9, eg_scores_dili_filtered10)
+```
+
+```{r}
+eg_scores_dili_sili_filtered <- eg_scores_dili_sili_filtered %>%
+  mutate(experiment_sili = case_when(
+    experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "rat 48h",
+    experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "mouse 48h",
+    TRUE ~ experiment_sili  # Keep other values unchanged
+  ))
+
+```
+
+
+##Create correlation plots for the mouse 48h model
+```{r}
+
+# Initialize plot list
+plot_list <- list() 
+
+# Loop through each experiment and create a correlation plot
+unique_experiments <- unique(eg_scores_dili_sili_filtered$experiment_dili)
+
+for (exp in unique_experiments) {
+  # Subset the data for the current experiment
+  subset_data <- eg_scores_dili_sili_filtered %>% 
+    filter(experiment_dili == exp)%>%
+    filter(experiment_sili == "mouse 48h")
+  
+  # Check if subset_data is non-empty
+  if (nrow(subset_data) > 0) {
+   
+    # Identify the top 5 and bottom 5 modules based on eg_score
+    top_5_dili <- subset_data %>% top_n(5, eg_score_dili)
+    top_5_sili<- subset_data %>% top_n(5, eg_score_sili)
+    bottom_5_dili <- subset_data %>% top_n(-5, eg_score_dili)
+    bottom_5_sili <-subset_data %>% top_n(-5, eg_score_sili)
+  
+   # Label the top and bottom modules
+    label_data1 <- bind_rows(top_5_dili, bottom_5_dili) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+
+    
+    label_data2 <- bind_rows(bottom_5_sili, top_5_sili)%>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+
+    
+    label_data <- rbind(label_data2, label_data1)
+    
+    p <- ggplot(subset_data, aes(x = eg_score_sili, y = eg_score_dili, color = experiment_sili)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) + 
+  geom_label_repel(data = label_data1, aes(label = module_number), 
+                   box.padding =0.1, color = "red", segment.color = "grey50") +
+  geom_label_repel(data = label_data2, aes(label = module_number), 
+                   box.padding = 0.8, color = "blue", segment.color = "grey50") +
+  labs(title = paste("Correlation plot of the liver modules after", exp),
+       x = "Eigengene score of the mouse 48h liver modules",
+       y = paste("Eigengene score of the liver modules for", exp))+
+  theme_minimal() +
+      scale_color_manual(values = "green")
+    
+    print(p)
+    
+
+    # Store the plot in the plot_list
+    plot_list[[length(plot_list) + 1]] <- p
+    
+  } else {
+    message(paste("No data available for experiment:", exp))
+  }
+}
+```
+##Create correlation plots for the mouse 48h model + pear r score
+
+```{r}
+# Initialize plot list
+plot_list <- list() 
+
+# Loop through each experiment and create a correlation plot
+unique_experiments <- unique(eg_scores_dili_sili_filtered$experiment_dili)
+
+for (exp in unique_experiments) {
+  # Subset the data for the current experiment
+  subset_data <- eg_scores_dili_sili_filtered %>% 
+    filter(experiment_dili == exp) %>%
+    filter(experiment_sili == "mouse 48h")
+  
+  # Check if subset_data is non-empty
+  if (nrow(subset_data) > 0) {
+    # Identify the top 5 and bottom 5 modules based on eg_score
+    top_5_dili <- subset_data %>% top_n(5, eg_score_dili)
+    top_5_sili <- subset_data %>% top_n(5, eg_score_sili)
+    bottom_5_dili <- subset_data %>% top_n(-5, eg_score_dili)
+    bottom_5_sili <- subset_data %>% top_n(-5, eg_score_sili)
+  
+    # Label the top and bottom modules
+    label_data1 <- bind_rows(top_5_dili, bottom_5_dili) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+
+    label_data2 <- bind_rows(bottom_5_sili, top_5_sili) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+
+    label_data <- rbind(label_data2, label_data1)
+    
+    # Calculate the correlation coefficient
+    R_score <- cor(subset_data$eg_score_sili, subset_data$eg_score_dili)
+
+    p <- ggplot(subset_data, aes(x = eg_score_sili, y = eg_score_dili, color = experiment_sili)) +
+      geom_point() +
+      geom_smooth(method = "lm", se = FALSE) + 
+      geom_label_repel(data = label_data1, aes(label = module_number), 
+                       box.padding = 0.1, color = "red", segment.color = "grey50") +
+      geom_label_repel(data = label_data2, aes(label = module_number), 
+                       box.padding = 0.8, color = "blue", segment.color = "grey50") +
+      labs(title = paste("Correlation plot of the liver modules after", exp),
+           x = "Eigengene score of the mouse 48h liver modules",
+           y = paste("Eigengene score of the liver modules for", exp)) +
+      theme_minimal() +
+      scale_color_manual(values = "green") +
+      annotate("text", x = Inf, y = Inf, label = paste("R =", round(R_score, 2)), hjust = 8.1, vjust = 2, size = 4, color = "black")
+    
+    print(p)
+    
+    # Store the plot in the plot_list
+    plot_list[[length(plot_list) + 1]] <- p
+    
+  } else {
+    message(paste("No data available for experiment:", exp))
+  }
+}
+
+```
+
+
+
+
+##select the top 10 compounds with the highest pearR score for mouse
+```{r}
+eg_scores_dili_filtered1 <- eg_scores_dili %>%
+  filter(experiment == "PHALLOIDIN", conc == "1", time == "1") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered2 <- eg_scores_dili %>%
+filter(experiment == "MONOCROTALINE", conc == "10", time== "8") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered3 <- eg_scores_dili %>%
+filter(experiment == "DANAZOL", conc == "1000", time== "1") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered4 <- eg_scores_dili %>%
+filter(experiment == "METHYLENE DIANILINE", conc == "100", time== "4") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered5 <- eg_scores_dili %>%
+filter(experiment == "TRIMETHADIONE", conc == "500", time== "1") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered6 <- eg_scores_dili %>%
+filter(experiment == "THIOACETAMIDE", conc == "45", time== "4") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered7 <- eg_scores_dili %>%
+filter(experiment == "THIOACETAMIDE", conc == "45", time== "15") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))%>%
+  mutate(experiment_dili = paste0(experiment_dili, "2"))
+
+eg_scores_dili_filtered8 <- eg_scores_dili %>%
+filter(experiment == "CARBON TETRACHLORIDE", conc == "300", time== "15") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))
+
+eg_scores_dili_filtered9 <- eg_scores_dili %>%
+filter(experiment == "THIOACETAMIDE", conc == "45", time== "29") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))%>%
+  mutate(experiment_dili = paste0(experiment_dili, "3"))
+
+eg_scores_dili_filtered10 <- eg_scores_dili %>%
+filter(experiment == "MONOCROTALINE", conc == "10", time== "15") %>%
+  merge(eg_scores_sili_filtered, by = "module", suffixes = c("_dili", "_sili"))%>%
+  mutate(experiment_dili = paste0(experiment_dili, "2"))
+
+eg_scores_dili_sili_filtered_mouse <- rbind(
+  # eg_scores_dili_filtered1, eg_scores_dili_filtered2, eg_scores_dili_filtered3) 
+  # eg_scores_dili_filtered4, eg_scores_dili_filtered5,
+  eg_scores_dili_filtered6, eg_scores_dili_filtered7, eg_scores_dili_filtered8)
+  # eg_scores_dili_filtered9, eg_scores_dili_filtered10)
+```
+
+```{r}
+eg_scores_dili_sili_filtered_mouse <- eg_scores_dili_sili_filtered_mouse %>%
+  mutate(experiment_sili = case_when(
+    experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "rat 48h",
+    experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "mouse 48h",
+    TRUE ~ experiment_sili  # Keep other values unchanged
+  ))
+
+```
+
+
+##Create correlation plots for the rat 48h model
+```{r}
+
+# Initialize plot list
+plot_list_mouse <- list()
+
+# Loop through each experiment and create a correlation plot
+unique_experiments_mouse <- unique(eg_scores_dili_sili_filtered_mouse$experiment_dili)
+
+for (exp in unique_experiments_mouse) {
+  # Subset the data for the current experiment
+  subset_data_mouse <- eg_scores_dili_sili_filtered_mouse %>% filter(experiment_dili == exp)%>%
+    filter(experiment_sili == "rat 48h")
+  
+  # Check if subset_data is non-empty
+  if (nrow(subset_data_mouse) > 0) {
+   
+    # Identify the top 10 and bottom 10 modules based on eg_score
+    top_5_dili_mouse <- subset_data_mouse %>% top_n(5, eg_score_dili)
+    top_5_sili_mouse<- subset_data_mouse %>% top_n(5, eg_score_sili)
+    bottom_5_dili_mouse <- subset_data_mouse %>% top_n(-5, eg_score_dili)
+    bottom_5_sili_mouse <-subset_data_mouse %>% top_n(-5, eg_score_sili)
+    
+   # Label the top and bottom modules
+    label_data_mouse1 <- bind_rows( bottom_5_dili_mouse, top_5_dili_mouse) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+     
+    
+    label_data_mouse2 <- bind_rows( bottom_5_sili_mouse, top_5_sili_mouse) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+    
+    
+    label_data <- bind_rows(top_5_dili, bottom_5_dili, top_5_sili, bottom_5_sili) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+    
+    label_data_mouse <- rbind(label_data_mouse2, label_data_mouse1)
+
+
+    p <- ggplot(subset_data_mouse, aes(x = eg_score_sili, y = eg_score_dili, color = experiment_sili)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) + 
+  geom_label_repel(data = label_data_mouse1, aes(label = module_number), 
+                   box.padding = 1.5, color = "red", segment.color = "grey50") +
+  geom_label_repel(data = label_data_mouse2, aes(label = module_number), 
+                   box.padding = 0.2, color = "blue", segment.color = "grey50") +
+  labs(title = paste("Correlation plot of the liver modules after", exp),
+       x = "Eigengene score of the rat 48h liver modules",
+       y = paste("Eigengene score for the liver modules for", exp))+
+  theme_minimal() +
+      scale_color_manual(values = "orange")
+   
+  
+    print(p)
+
+    # Store the plot in the plot_list
+    plot_list_mouse[[length(plot_list_mouse) + 1]] <- p
+    
+  } else {
+    message(paste("No data available for experiment:", exp))
+  }
+}
+
+```
+
+##Create correlation plots for the rat 48h model + pear r  score in plot
+```{r}
+# Initialize plot list
+plot_list_mouse <- list()
+
+# Loop through each experiment and create a correlation plot
+unique_experiments_mouse <- unique(eg_scores_dili_sili_filtered_mouse$experiment_dili)
+
+for (exp in unique_experiments_mouse) {
+  # Subset the data for the current experiment
+  subset_data_mouse <- eg_scores_dili_sili_filtered_mouse %>% 
+    filter(experiment_dili == exp) %>%
+    filter(experiment_sili == "rat 48h")
+  
+  # Check if subset_data is non-empty
+  if (nrow(subset_data_mouse) > 0) {
+    # Identify the top 5 and bottom 5 modules based on eg_score
+    top_5_dili_mouse <- subset_data_mouse %>% top_n(5, eg_score_dili)
+    top_5_sili_mouse <- subset_data_mouse %>% top_n(5, eg_score_sili)
+    bottom_5_dili_mouse <- subset_data_mouse %>% top_n(-5, eg_score_dili)
+    bottom_5_sili_mouse <- subset_data_mouse %>% top_n(-5, eg_score_sili)
+    
+    # Label the top and bottom modules
+    label_data_mouse1 <- bind_rows(bottom_5_dili_mouse, top_5_dili_mouse) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+
+    label_data_mouse2 <- bind_rows(bottom_5_sili_mouse, top_5_sili_mouse) %>%
+      mutate(experiment_sili = case_when(
+        experiment_sili == "uploadFile2_liverhepatocytesPHx48hr" ~ "rat_dataset",
+        experiment_sili == "uploadFile1_NCSUPHxcaudate" ~ "mouse_dataset",
+        TRUE ~ as.character(experiment_sili)
+      ))
+
+    label_data_mouse <- rbind(label_data_mouse2, label_data_mouse1)
+
+    # Calculate the correlation coefficient
+    R_score <- cor(subset_data_mouse$eg_score_sili, subset_data_mouse$eg_score_dili)
+
+    p <- ggplot(subset_data_mouse, aes(x = eg_score_sili, y = eg_score_dili, color = experiment_sili)) +
+      geom_point() +
+      geom_smooth(method = "lm", se = FALSE) +
+      geom_label_repel(data = label_data_mouse1, aes(label = module_number), 
+                       box.padding = 1.5, color = "red", segment.color = "grey50") +
+      geom_label_repel(data = label_data_mouse2, aes(label = module_number), 
+                       box.padding = 0.2, color = "blue", segment.color = "grey50") +
+      labs(title = paste("Correlation plot of the liver modules after", exp),
+           x = "Eigengene score of the rat 48h liver modules",
+           y = paste("Eigengene score for the liver modules for", exp)) +
+      theme_minimal() +
+      scale_color_manual(values = "orange") +
+      annotate("text", x = Inf, y = Inf, label = paste("R =", round(R_score, 2)), hjust = 8.1, vjust = 2, size = 4, color = "black")
+    
+    # Store the plot in the plot_list
+    plot_list_mouse[[length(plot_list_mouse) + 1]] <- p
+    
+    print(p)
+
+    #
+  }
+}
+
+```
+
+
+
+
+
+```{r}
+library(cowplot)
+
+# Combine the plots into a grid
+combined_plot_new1 <- plot_grid(
+  plotlist = plot_list, nrow = 1, align = 'h', rel_widths = rep(1, length(plot_list))
+)
+
+combined_plot_new2 <- plot_grid(
+  plotlist = plot_list_mouse, nrow = 1, align = 'h', rel_widths = rep(1, length(plot_list_mouse))
+)
+
+# Combine the two rows into one plot
+combined_plot <- plot_grid(combined_plot_new1, combined_plot_new2, nrow = 2)
+
+# Save the combined plot as a PNG file
+ggsave("combined_correlation_plots_0107.png", combined_plot, width = 18, height = 14, units = "in")
+
+```
+
+
+##export the correlation plots
+```{r}
+library(patchwork)
+combined_correlation_plot_rat_mice <- rbind(plot_list_mouse, plot_list)
+combined_plot_new1 <- wrap_plots(plotlist = plot_list, nrow = 2)  # Adjust nrow based on the number of plots you want in each row
+# Save the combined plot as a PNG file
+ggsave("combined_correlation_plots.png", plot_list, width = 18, height = 14, units = "in")
+
+```
+
+

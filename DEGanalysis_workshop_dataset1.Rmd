@@ -1,0 +1,423 @@
+---
+title: "BOO2024 - Hands-on workshop DEG analysis"
+author: "Imke Bruns (MSc), Steven Kunnen (PhD), Giulia Callegaro (PhD), Hugo van Kessel (Msc)"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: default
+    highlight: kate
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+# Setup {.tabset}
+```{r include=FALSE, echo=TRUE, message=FALSE}
+rm(list = ls()); gc()
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 80), tidy = TRUE)
+```
+
+
+## Load packages
+### Bioconductor
+```{r}
+# Check if BiocManager is available and install
+if(!require("BiocManager", quietly = T)){install.packages("BiocManager")}; library(BiocManager)
+
+# Check if BiocManager is available and install
+if(!require("DESeq2", quietly = T)){BiocManager::install("DESeq2", force = TRUE)}; library(DESeq2)
+```
+
+
+### CRAN
+```{r}
+# Check if pacman is available and install
+if(!require("pacman", quietly = T)){install.packages("pacman")}; library(pacman)
+
+# use packman to install CRAN packages
+p_load(tidyverse, ggpubr, data.table, ggfortify, stats)
+
+
+```
+
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+```
+
+
+## Load functions
+Functions can also be loaded from a source script, but for clarity we will include them in the script.
+```{r}
+
+# Function: tidy check deseq input  ----
+tidy_check = function(countdata, metadata) {
+  # We assume first column will contain the row names (tidy = T in DESeqDataSetFromMatrix)
+  names_count = names(countdata)[-1]
+  # Not obligatory for DEseq2, but we want row names in the first column
+  names_meta = metadata[[1]]
+  # Test if the names from the count and metadata are identical (same entries, same order)
+  identical = identical(names_count, names_meta)
+  # If not identical, do we have the same entries (ignores duplicates)
+  setequal = identical || setequal(names_count, names_meta)
+  # Test for duplicates (in theory, but very unlikely, this can also happen if identical is true)
+  has_duplicates = anyDuplicated(names_meta) > 0
+  # If the names are not identical, but we're looking at the same entries without duplicates,
+  # then the problem is the order of the entries
+  problem_is_order = !identical && setequal && !has_duplicates
+  # List possibilities to test
+  input = list(identical = identical, setequal = setequal, has_duplicates = has_duplicates, problem_is_order = problem_is_order)
+
+  if(input$identical & input$setequal & !input$has_duplicates & !input$problem_is_order){
+    return(TRUE)
+  } else {
+    print(input)
+    return(FALSE)
+  }
+}
+
+```
+
+
+
+# Load data {.tabset}
+Here you should load the data you obtained from the quality control (QC) workshop last week.
+
+## Metadata
+We name the object `metadata`, try to read the data into R yourself.
+```{r}
+# metadata = 
+metadata<-read_xlsx(file.path(input_dir,"PHx_metadata.xlsx"))
+
+```
+
+
+## Raw counts
+We name the object `countdata_raw`, try to read the data into R yourself.
+```{r}
+# countdata_raw = 
+deseq_results <- read.delim(file.path(output_dir,"dataset1_rat_Steven.txt"))
+
+library(dplyr)
+
+deseq_results_NCSU <- deseq_results %>%
+  filter(experiment %in% c('NCSU.PHx.caudate'))
+
+```
+
+
+
+# Differential gene expression analysis based on the negative binomial distribution (DESeq2 package) {.tabset}
+
+## Generate contrast
+We first need to generate a contrast to tell the DESeq2 function which comparisons we want to make. Thus, here we match each treatment condition with a control condition. This is usually done per timepoint (we have a control condition for each of the timepoints). Examples: 
+* treatmentA_1uM_4hr vs control_4hr  
+* treatmentA_5uM_4hr vs control_4hr  
+* treatmentA_1uM_8hr vs control_8hr  
+* treatmentB_3uM_4hr vs control_4hr   
+
+
+Questions:   
+* What does the mean_id_treatment and mean_id_control column represent? hint: take a look at the metadata object   
+
+### Set control condition
+Check in your data what would be the control condition for your samples. The control condition can be DMSO/DMEM/MEDIUM/STARVMEDIUM/NaCl/etc. If there are multiple control conditions; create vector like this: c("DMSO", "DMEM")
+```{r error=F,warning=F,message=F, echo=F}
+
+# control_condition =  
+"time==0"
+
+```
+
+
+### Create the `contrast_table`
+```{r error=F,warning=F,message=F, echo=F}
+# We generate a contrast table which contains the mean_id comparison we aim the perform
+contrast_control = metadata %>%
+  filter(Treatment_abbr=="S", Lobe=="caudate") %>%
+  distinct(SAMPLE_ID, Treatment_abbr, Time_h, Lobe)
+
+
+contrast_treatment = metadata %>%
+  filter(!Treatment_abbr=="S", Lobe=="caudate") %>%
+  distinct(SAMPLE_ID, Treatment_abbr, Time_h, Lobe)
+
+
+contrast_table = left_join(x = contrast_treatment %>%
+                             select(MEAN_ID_TREATMENT = SAMPLE_ID, Time_h, Lobe, EXPERIMENT = Treatment_abbr),
+                           y = contrast_control %>%
+                             select(MEAN_ID_CONTROL = SAMPLE_ID, Time_h, Lobe, CONTROL = Treatment_abbr),
+                           by = "Time_h") %>%
+  distinct()
+
+
+contrast_table %>%
+  select(MEAN_ID_TREATMENT, MEAN_ID_CONTROL) %>%
+  as_tibble() %>%
+  print(n = 1000)
+
+
+```
+
+```{r}
+tidy_check(countdata = deseq_results_NCSU, metadata = metadata)
+```
+
+
+## Run DESeq2
+
+Questions:   
+* What can we conclude for each treatment condition?   
+* What is a differentially expressed gene?   
+* Why do we use padj and log2FC as threshold to determine if a gene is differentially expressed   
+* Give a definition of the following columns: baseMean, log2FoldChange, lfcSE, pvalue and padj   
+   
+```{r error=F,warning=F,message=F, echo=F}
+
+# We set the thresholds to find differential expressed genes
+padj_threshold <- 0.05
+log2FC_threshold <- log2(1.5)
+
+# We loop over the contrast table and select the corresponding data, make the DESeq object, cpm normalize, contrast the treatment with the control and print the ouput
+deseq_results = tibble()
+
+
+  if(nrow(metadata)==ncol(deseq_results_NCSU)-1){
+    
+    if(tidy_check(countdata = deseq_results_NCSU, metadata = metadata)){
+      deseq_object = DESeqDataSetFromMatrix(countData =  as.data.frame(deseq_results_NCSU),
+                                                 colData = metadata %>% mutate(SAMPLE_ID = as.factor(MEAN_ID)),
+                                                 design = ~ SAMPLE_ID,
+                                                 tidy = TRUE)
+    }
+    sizeFactors(deseq_object) = colSums(column_to_rownames(deseq_results_NCSU, var = "gene_id"))/1E6
+    deseq_object = DESeq(deseq_object)
+
+    for(i in 1:nrow(contrast_table)){
+    temp = data.frame(
+      results(deseq_object, contrast = c("SAMPLE_ID", contrast_table$MEAN_ID_TREATMENT[i], contrast_table$MEAN_ID_CONTROL[i]))) %>%
+      rownames_to_column(var = "gene_id") %>%
+      mutate(MEAN_ID_TREATMENT = contrast_table$MEAN_ID_TREATMENT[i], 
+             MEAN_ID_CONTROL = contrast_table$MEAN_ID_CONTROL[i]) %>% tibble()
+    
+    
+    up = temp %>% filter(padj < padj_threshold & log2FoldChange >= log2FC_threshold) %>% nrow()
+    down = temp %>% filter(padj < padj_threshold & log2FoldChange <= -log2FC_threshold) %>% nrow()
+    
+    cat(
+      paste("Treatment", contrast_table$MEAN_ID_TREATMENT[i], "vs. control", contrast_table$MEAN_ID_CONTROL[i]), 
+      "\npadj threshold =", padj_threshold, "log2FC threshold =", log2FC_threshold, 
+      "\nUp regulated DEGs =", up, "\nDown regulated DEGs =", down)
+    cat("\n")
+    cat("\n")
+    
+    deseq_results = deseq_results %>% bind_rows(temp)
+  }
+}
+
+# We print the DESeq result table
+{
+  cat("\n")
+  print("DESeq2 output table")
+  cat("\n")
+  deseq_results %>% str()  
+}
+```
+
+
+# Inspect DESeq2 output {.tabset}
+
+## Log2FC vs FC
+
+Questions:   
+* Log2FC vs FC, what is the difference? Take a look at the plots. Why do we use the log2FC and not the FC?   
+
+```{r error=F,warning=F,message=F}
+# We plot a density plot using the foldchange values of the treatment conditions
+deseq_results %>% 
+  select(log2FoldChange, MEAN_ID_TREATMENT) %>% 
+  mutate(FoldChange = 2^log2FoldChange) %>% 
+  ggplot() +
+  geom_density(mapping = aes(x = FoldChange)) +
+  facet_wrap(~MEAN_ID_TREATMENT) +
+  theme_bw() + 
+  labs(title = "Density plot of FoldChange values")
+
+# We ZOOM on x = c(0,10) and plot a density plot using the foldchange values of the treatment conditions
+deseq_results %>% 
+  select(log2FoldChange, MEAN_ID_TREATMENT) %>% 
+  mutate(FoldChange = 2^log2FoldChange) %>% 
+  ggplot() +
+  geom_density(mapping = aes(x = FoldChange)) +
+  facet_wrap(~MEAN_ID_TREATMENT) +
+  theme_bw() + 
+  labs(title = "ZOOM on x = c(0,10) Density plot of FoldChange values") +
+  coord_cartesian(xlim = c(0,10)) +
+  scale_x_continuous(breaks = 0:10)
+
+# We plot a density plot using the log2foldchange values of the treatment conditions
+deseq_results %>% 
+  select(log2FoldChange, MEAN_ID_TREATMENT) %>% 
+  mutate(FoldChange = 2^log2FoldChange) %>% 
+  ggplot() +
+  geom_density(mapping = aes(x = log2FoldChange)) +
+  facet_wrap(~MEAN_ID_TREATMENT) +
+  theme_bw() + 
+  labs(title = "Density plot of log2FoldChange values")
+
+```
+
+
+
+## Number of differentially expressed genes (DEGs)
+
+Questions:   
+* To inspect DEG count in your samples it is very quick to make a bar plot, but what are the drawbacks of this very simple DEG bar plot?   
+
+```{r error=F,warning=F,message=F}
+padj_threshold <- 0.05
+log2FC_threshold <- log2(1.5)
+
+deseq_results %>% 
+  group_by(MEAN_ID_TREATMENT,.drop = F) %>% 
+  filter(log2FoldChange > log2FC_threshold & padj < padj_threshold) %>% 
+  count(MEAN_ID_TREATMENT) %>% 
+  ggplot(mapping = aes(x = reorder(MEAN_ID_TREATMENT, -n), y = n)) + 
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, size=4))
+```
+
+### Volcano plot
+
+Questions:   
+* Why do we want to inspect a volcano plot? What conclusion can we make for each treatment condition?   
+
+```{r error=F,warning=F,message=F}
+padj_threshold <- 0.05
+log2FC_threshold <- log2(1.5)
+
+# We assign a status to every gene, either significant or not, based on the thresholds
+red = deseq_results %>% 
+  mutate(class = if_else(condition = abs(log2FoldChange) > log2FC_threshold & padj < padj_threshold,
+                         true = "significant",
+                         false = "not significant")) %>% 
+  drop_na()
+
+# We generate a scatter plot coloring the significant and not significant genes per treatment condition
+plot <- ggplot(data = red, mapping = aes(x = log2FoldChange, y = -log10(padj), color = class)) + 
+  facet_wrap(~MEAN_ID_TREATMENT) +
+  geom_point(size = 0.5) +
+  theme_bw()
+
+# We print the output to generate the plot
+plot
+
+```
+
+
+## MA plot
+
+Questions:   
+* What conclusions can you make for the red data points in the the MA plot?   
+* What can you conclude for genes with baseMean < 2.5 and log2FC > 2.5? Are these log2FC values biologically significant?
+
+```{r error=F,warning=F,message=F}
+# Assign baseMean and log2FC thresholds
+baseMean_threshold <- 2.5
+log2FC_threshold <- 2.5
+padj_threshold <- 0.05
+
+# We generate the plot and print the output
+ggplot(data = deseq_results, aes(x = baseMean, y = log2FoldChange)) + 
+  geom_point(size=0.5) +
+  geom_point(data = deseq_results %>% filter(padj < padj_threshold), color = "red", size=0.5) +
+  facet_wrap(~MEAN_ID_TREATMENT) +
+  scale_x_continuous(limits = c(0,10)) +
+  theme_bw() +
+  labs(title = "MA plot with significant genes in red")
+```
+
+
+#### Principal component analysis on DESeq output using the log2FC values
+
+Questions:   
+* What can you conclude from the PCA on the log2FC of the treatment conditions? 
+
+
+```{r error=F,warning=F,message=F}
+
+# We transpose prepare the data frame for pca analysis
+log2fc_results <- deseq_results %>%
+  select(gene_symbol, log2FoldChange, MEAN_ID_TREATMENT) %>%
+  pivot_wider(names_from = MEAN_ID_TREATMENT, values_from = log2FoldChange)
+
+# We print the genes with NA as log2FC result
+print("NA genes dropped from PCA analysis")
+log2fc_results[!!rowSums(is.na(log2fc_results)),]
+
+# We further wrangle the data frame for pca analysis
+pca_data <- log2fc_results %>% 
+  drop_na() %>% 
+  pivot_longer(cols = where(is.numeric), names_to = "MEAN_ID") %>% 
+  pivot_wider(values_from = value, names_from = gene_symbol) %>%
+  left_join(metadata, by="MEAN_ID")
+
+# We perform pca analysis on numerical columns
+pca_object = prcomp(pca_data %>% select(log2fc_results$gene_symbol), center = F, scale. = F)
+
+# We print the output
+  autoplot(object = pca_object, data = pca_data, colour = "TIMEPOINT", size="CONCENTRATION") + 
+    theme_bw()
+```
+
+
+# Create expression data
+```{r}
+expression_long = deseq_results_NCSU %>% 
+  dplyr::select(experiment,
+                gene_id,
+                log2fc,
+                pvalue,
+                padj)
+
+expression_long_TXG <- left_join(expression_long, metadata %>%
+  dplyr::select("experiment" = "SAMPLE_ID", "time" = "Time")%>%
+    unique(),
+  by = c("experiment"))
+
+
+
+# add columns needed for TXG-MAPr
+expression_long_TXG <- left_join(expression_long, metadata %>%
+                                   dplyr::select("experiment" = "COMPOUND", "time" = "TIME", "conc" = "DOSE", "sample_id" = "MEAN_ID"),
+                                 by = c("sample_id")) %>%
+  rename("gene_id" = gene_symbol) %>%
+  mutate(time = gsub("hr", "", time), # remove hr from time
+         conc = gsub("uM", "", conc)) %>% # remove uM from conc
+  select(everything(), -"sample_id")
+
+```
+
+
+# Save output
+```{r}
+write_rds(deseq_results, file.path(output_dir, paste0(gsub( "-", "", Sys.Date()), "_DESeq2_results_unformatted.rds")))
+write.table(deseq_results_NCSU, file.path(output_dir, paste0(gsub( "-", "", Sys.Date()), "_TXG-MAPr_dataset1_rat.txt")),  sep = "\t", row.names = F)
+
+```
+
+

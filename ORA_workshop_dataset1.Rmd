@@ -1,0 +1,398 @@
+---
+title: "BOO2024 - Hands-on workshop DEG analysis"
+author: "Imke Bruns (MSc), Steven Kunnen (PhD), Giulia Callegaro (PhD), Hugo van Kessel (Msc)"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: default
+    highlight: kate
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+# Setup {.tabset}
+```{r include=FALSE, echo=TRUE, message=FALSE}
+rm(list = ls()); gc()
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 80), tidy = TRUE)
+```
+
+
+## Load packages
+### CRAN
+```{r}
+# Check if pacman is available and install
+if(!require("pacman", quietly = T)){install.packages("pacman")}; library(pacman)
+
+# use packman to install CRAN packages
+p_load(tidyverse, data.table, enrichR, fgsea)
+
+p_load(tidyverse, ggpubr, corrr, ggfortify, ggcorrplot, ggdendro, data.table, GGally)
+if(!require("readxl", quietly=T)){install.packages("readxl")}; library("readxl")
+
+```
+
+
+## Set directories
+```{r}
+# input directory
+if(!dir.exists("INPUT")){
+  dir.create(path = file.path(getwd(), "INPUT"))
+}
+input_dir <- file.path(getwd(), "INPUT")
+
+# output directory
+if(!dir.exists("OUTPUT")){
+  dir.create(path = file.path(getwd(), "OUTPUT"))
+}
+output_dir <- file.path(getwd(), "OUTPUT")
+
+```
+
+
+##for dataset 2
+
+## Load functions
+Functions can also be loaded from a source script, but for clarity we will include them in the script.
+```{r}
+
+
+runEnrichR = function(genes) {
+  enrichR = enrichr(
+    genes = genes,
+    databases = c(
+      "BioCarta_2016",
+      "HumanCyc_2016",
+      "KEGG_2021_Human",
+      "Reactome_2022",
+      "WikiPathway_2021_Human",
+      "InterPro_Domains_2019",
+      "GO_Molecular_Function_2023",
+      "GO_Cellular_Component_2023",
+      "GO_Biological_Process_2023"
+    )
+  ) 
+  
+  enrichR = rbindlist(enrichR, idcol = T)
+  names(enrichR)[1:2] = c("database", "source")
+  return(enrichR)
+}
+
+```
+
+
+
+## Metadata
+We name the object `metadata`, try to read the data into R yourself.
+```{r}
+# metadata = 
+metadata<-  read_delim(file.path(input_dir,"20240517_metadata_processed.csv"))
+
+metadata<-
+  metadata %>%
+  select(SAMPLE_ID, everything())
+
+```
+
+## Metadata
+We name the object `metadata`, try to read the data into R yourself.
+```{r}
+metadata_dataset1<-read_xlsx(file.path(input_dir,"PHx_metadata.xlsx"))
+
+```
+
+## DESeq2 output
+We name the object `deseq_results`, try to read the data into R yourself.
+```{r}
+  # deseq_results_old <- read.delim(file.path(output_dir,"dataset1_rat_Steven.txt"))
+deseq_results_dataset1 <- read.delim(file.path(output_dir,"NCSU_PHx_DEG_Data_all_symbol.txt"))
+
+library(dplyr)
+
+deseq_results_NCSU_dataset1 <- deseq_results_dataset1 %>%
+  filter(experiment_id %in% c('NCSU.PHx_Liver_PHx_Hepatectomy_0d_caudate',
+                              'NCSU.PHx_Liver_PHx_Hepatectomy_0.042d_caudate',
+                              'NCSU.PHx_Liver_PHx_Hepatectomy_0.125d_caudate',
+                              'NCSU.PHx_Liver_PHx_Hepatectomy_0.25d_caudate',
+                           'NCSU.PHx_Liver_PHx_Hepatectomy_0.5d_caudate',	
+                          'NCSU.PHx_Liver_PHx_Hepatectomy_0.75d_caudate',				
+'NCSU.PHx_Liver_PHx_Hepatectomy_1d_caudate',			
+'NCSU.PHx_Liver_PHx_Hepatectomy_2d_caudate',		
+'NCSU.PHx_Liver_PHx_Hepatectomy_3d_caudate',				
+'NCSU.PHx_Liver_PHx_Hepatectomy_5d_caudate',			
+'NCSU.PHx_Liver_PHx_Hepatectomy_10d_caudate',				
+'NCSU.PHx_Liver_PHx_Hepatectomy_15d_caudate'
+))
+
+unique(deseq_results_NCSU_dataset1$experiment_id)
+
+```
+
+
+# Rat to human genes
+```{r}
+human_ncbi = fread(input = "https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/Homo_sapiens.gene_info.gz", 
+                   stringsAsFactors = FALSE, 
+                   fill = TRUE) %>%
+  tibble() %>%
+  select("gene_symbol" = Symbol,
+         "synonym" = Synonyms,
+         "entrez_id" = GeneID,
+         "dbxrefs" = dbXrefs,
+         "modification_date" = Modification_date) %>%
+  distinct() %>%
+  mutate(dbxrefs = paste0(dbxrefs, "|")) %>%
+  mutate(gene_symbol = gene_symbol,
+         entrez_id = as.character(entrez_id),
+         ensembl_id = str_extract(string = dbxrefs, "(?<=embl:)(.*?)(?=\\|)"),
+         hgnc_id = str_extract(string = dbxrefs, "(?<=HGNC:HGNC:)(.*?)(?=\\|)"),
+         mim_id = str_extract(string = dbxrefs, "(?<=MIM:)(.*?)(?=\\|)"),
+         alliancegenome_id = str_extract(string = dbxrefs, "(?<=AllianceGenome:HGNC:)(.*?)(?=\\|)")) %>%
+  select(gene_symbol, entrez_id, ensembl_id, hgnc_id, mim_id, alliancegenome_id, modification_date) %>%
+  mutate(user_date = format(Sys.time(), "%Y%m%d"))
+```
+ 
+ 
+```{r include=TRUE, echo=TRUE, message=FALSE}
+ 
+rat_ncbi = fread(input = "https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/Rattus_norvegicus.gene_info.gz", 
+                 stringsAsFactors = FALSE, 
+                 fill = TRUE) %>%
+  tibble() %>%
+  select("gene_symbol" = Symbol,
+         "synonym" = Synonyms,
+         "entrez_id" = GeneID,
+         "dbxrefs" = dbXrefs,
+         "modification_date" = Modification_date) %>%
+  distinct() %>%
+  mutate(dbxrefs = paste0(dbxrefs, "|")) %>%
+  mutate(gene_symbol = gene_symbol,
+         entrez_id = as.character(entrez_id),
+         rgd_id = str_extract(string = dbxrefs, "(?<=RGD:)(.*?)(?=\\|)"),
+         ensembl_id = str_extract(string = dbxrefs, "(?<=embl:)(.*?)(?=\\|)"),
+         alliancegenome_id = str_extract(string = dbxrefs, "(?<=AllianceGenome:RGD:)(.*?)(?=\\|)")) %>%
+  select(gene_symbol, entrez_id, ensembl_id,rgd_id, alliancegenome_id, modification_date) %>%
+  mutate(user_date = format(Sys.time(), "%Y%m%d"))
+ 
+```
+ 
+```{r}
+rat_rgd <- fread(input = "https://download.rgd.mcw.edu/data_release/RAT/ORTHOLOGS_RAT.txt",
+                 stringsAsFactors = FALSE, 
+                 fill = TRUE, 
+                 skip = 15, 
+                 header = "auto", 
+                 na.strings = c(NA_character_, ""))
+rat_rgd <- rat_rgd[, !duplicated(colnames(rat_rgd)), with = F] %>% data.frame() %>% 
+  select(RAT_GENE_SYMBOL,
+         RAT_GENE_NCBI_GENE_ID,
+         HUMAN_GENE_SYMBOL,
+         HUMAN_GENE_NCBI_GENE_ID) %>% tibble()
+# update rat_rgd with the most recent gene_symbols
+rat_rgd$HUMAN_GENE_SYMBOL <- human_ncbi$gene_symbol[match(rat_rgd$HUMAN_GENE_NCBI_GENE_ID,human_ncbi$entrez_id)]
+rat_rgd$RAT_GENE_SYMBOL <-     rat_ncbi$gene_symbol[match(rat_rgd$RAT_GENE_NCBI_GENE_ID,rat_ncbi$entrez_id)]
+
+
+```
+ 
+```{r}
+deseq_results_NCSU = deseq_results_NCSU_dataset1 %>%
+  mutate(RAT_GENE_NCBI_GENE_ID = as.character(gene_id)) %>%
+  left_join(rat_rgd, by = c("RAT_GENE_NCBI_GENE_ID"))
+```
+
+
+# Overrepresentation analysis
+Questions:   
+* Which cellular processes are activated your cell type of interest after compound exposure?
+
+```{r error=F,warning=F,message=F}
+
+# We set the threshold for significant genes
+padj_threshold_rat <- 0.1
+
+
+  
+# We perform ORA analysis using EnrichR
+ora_rat <- deseq_results_NCSU %>%
+  filter(p_adj < padj_threshold_rat) %>%
+  nest_by(experiment_id) %>%
+  mutate(significant_genes = list(data %>%
+                                    arrange(p_adj) %>%
+                                    pull(gene_symbol))) %>%
+  mutate(ora = list(
+    runEnrichR(genes = significant_genes) %>%
+      filter(Adjusted.P.value < 0.1))
+)
+
+# print the output
+
+for (i in ora$experiment_id) {
+  print(paste0("Top 10 significant ORA for ", i))
+  print(
+    ora %>%
+      filter(experiment_id == i) %>%
+      dplyr::select(experiment_id, ora) %>%
+      unnest(cols = c(ora)) %>%
+      dplyr::select(experiment_id, database, source, Adjusted.P.value, Genes) %>%
+      arrange(Adjusted.P.value) %>%
+      ungroup() %>%
+      dplyr::slice(1:10)
+  )
+}
+
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+ora_results_rat <- ora_rat %>%
+  unnest(cols = c(ora)) %>%
+  select(experiment_id, source, Adjusted.P.value) %>%
+  ungroup()
+
+# split_data <- split(ora_results, ora_results$experiment_id)
+# 
+# print(split_data[1])
+```
+
+
+```{r}
+get_top_and_bottom_Adjusted.P.value_rat <- function(ora_results_rat, n = 5) {
+  # Add absolute Adjusted.P.value column
+  ora_results <- ora_results_rat %>%
+    mutate(abs_Adjusted.P.value = abs(Adjusted.P.value))
+  
+  # Sort by Adjusted.P.value within each condition
+  sorted_results <- ora_results %>%
+    arrange(experiment_id, desc(Adjusted.P.value))
+  
+  # Select top 5 highest Adjusted.P.value and bottom 5 lowest Adjusted.P.value pathways per condition
+  top_and_bottom_Adjusted.P.value <- sorted_results %>%
+    group_by(experiment_id) %>%
+    slice(c(1:n, n() - (0:(n-1)))) %>%  # Select top n and bottom n rows per group
+    ungroup() %>%
+    arrange(experiment_id, desc(Adjusted.P.value)) %>%  # Optional: reorder for clarity
+    select(-abs_Adjusted.P.value)  # Remove abs_Adjusted.P.value column if not needed
+  
+  return(top_and_bottom_Adjusted.P.value)
+}
+
+# Usage example:
+combined_results_ora_rat <- get_top_and_bottom_Adjusted.P.value_rat(ora_results_rat, n = 5)
+combined_results_ora_rat <- combined_results_ora_rat %>%
+  rename(MEAN_ID_TREATMENT = experiment_id)
+combined_results_ora_mouse_rat <- rbind(combined_results_ora_mouse, combined_results_ora_rat)
+
+ora_rat <- ora_rat %>%
+  rename(MEAN_ID_TREATMENT = experiment_id)
+
+ora_rat_mice<- bind_rows(ora_mouse, ora_rat)
+```
+
+
+```{r}
+# Load necessary packages
+library(dplyr)
+library(purrr)
+library(tidyr)
+
+# Assuming combined_results_ora_mouse_rat and ora_rat_mice are already loaded
+
+# Extract all unique pathways and MEAN_ID_TREATMENTS
+combined_results_pathways <- unique(combined_results_ora_mouse_rat$source)
+mean_id_treatment_list <- unique(ora_rat_mice$MEAN_ID_TREATMENT)
+
+# Create a dataframe with all combinations of MEAN_ID_TREATMENT and pathways
+all_combinations <- expand.grid(MEAN_ID_TREATMENT = mean_id_treatment_list, 
+                                source = combined_results_pathways, 
+                                stringsAsFactors = FALSE)
+
+# Initialize an empty list to store filtered results
+filtered_results_list <- list()
+
+# Extract ora_output from ora_rat_mice
+ora_output_list <- ora_rat_mice$ora
+
+# Loop through each list in ora_output_list
+for (i in seq_along(ora_output_list)) {
+  # Extract the current list and corresponding MEAN_ID_TREATMENT
+  current_list <- ora_output_list[[i]]
+  mean_id_treatment <- ora_rat_mice$MEAN_ID_TREATMENT[i]
+  
+  # Convert to data frame if necessary
+  current_df <- as.data.frame(current_list)
+  
+  # Append MEAN_ID_TREATMENT to the current data frame
+  current_df$MEAN_ID_TREATMENT <- mean_id_treatment
+  
+  # Filter the current data frame for the pathways in combined_results_pathways
+  filtered_df <- current_df %>%
+    filter(source %in% combined_results_pathways) %>%
+    select(source, Adjusted.P.value, MEAN_ID_TREATMENT)
+  
+  # Add filtered data frame to the list
+  filtered_results_list[[i]] <- filtered_df
+}
+
+# Combine all filtered results into a single dataframe
+combined_filtered_results_rat_mice_ora <- bind_rows(filtered_results_list)
+
+# Merge the combined_filtered_results_rat_mice_ora with all_combinations to ensure all pathways for each MEAN_ID_TREATMENT
+final_df <- left_join(all_combinations, combined_filtered_results_rat_mice_ora, 
+                      by = c("MEAN_ID_TREATMENT", "source"))
+
+# Print the final dataframe
+print(final_df)
+
+export_heatmap_ora <- na.omit(final_df)
+write.table(export_heatmap_ora, file.path(output_dir, paste0(gsub( "-", "", Sys.Date()), "_ORA_results_heatmap_rat_mice")), sep = "\t", row.names = F)
+
+
+```
+
+
+```{r}
+# combined_results_pathways contains all the unique pathways you want to select
+combined_results_pathways <- unique(combined_results_ora_mouse_rat$source)
+
+# Initialize an empty data frame to store combined results
+combined_filtered_results_rat_mice_ora <- data.frame()
+
+# Extract ora_output and MEAN_ID_TREATMENT from gsea tibble
+ora_output_list <- ora_rat_mice
+mean_id_treatment_list <- unique(combined_results_ora_mouse_rat$source)
+# Loop through each list in fgsea_output_list
+for (i in seq_along(ora_output_list)) {
+  # Extract the current list and corresponding MEAN_ID_TREATMENT
+  current_list <- ora_output_list$ora[[i]]
+  mean_id_treatment <- mean_id_treatment_list[[i]]
+  
+  # Convert to data frame if necessary
+  current_df <- as.data.frame(current_list)
+  
+  # Append MEAN_ID_TREATMENT to the current data frame
+  current_df$MEAN_ID_TREATMENT <- mean_id_treatment
+  
+  # Filter the current data frame for the pathways in combined_results_pathways
+  filtered_df <- current_df %>%
+    filter(source %in% combined_results_pathways) %>%
+    select(source, Adjusted.P.value, MEAN_ID_TREATMENT)
+  
+  # Append the filtered data frame to the combined data frame
+  combined_filtered_results_rat_mice_ora <- rbind(combined_filtered_results_rat_mice_ora, filtered_df)
+}
+
+```
+
+
+```{r}
+write.table(combined_results_rat_mice, file.path(output_dir, paste0(gsub( "-", "", Sys.Date()), "_GSEA_results_rat_mice_final?.txt")), sep = "\t", row.names = F)
+
+```
+
+
+
+
+
